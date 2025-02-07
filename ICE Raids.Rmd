@@ -22,67 +22,166 @@ library(glmnet)
 
 ice_raids <- read_excel("ice_raids.xlsx")
 peds_visits <- read_excel("pediatric_visits.xlsx")
+merged_data = left_join(ice_raids, peds_visits, by=c('city', 'date'))
+
+head(merged_data)
+```
+
+First is some simple exploratory data analysis.  
+```{r}
+raid_counts <-merged_data %>%
+  group_by(raid_type) %>%
+  summarize(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100,label = paste0(raid_type, "\n", round(percentage, 1), "%"))
+
+custom_colors <-c("Workplace"= "#ECBDC2","Residential"="#803B2F","Checkpoint"= "#F78072", "Other"="#DC978D")
+
+ggplot(raid_counts, aes(x = "", y = count, fill = raid_type)) +
+  geom_bar(width = 1, stat = "identity", color = "black", size = 0.7) +
+  coord_polar(theta = "y", start = 0) +
+  geom_text(aes(label = label),
+            position = position_stack(vjust = 0.5),
+            color = "black", size = 4, fontface = "bold") +
+  labs(title = "Distribution of ICE Raid Locations", fill = "Raid Type") +
+  scale_fill_manual(values = custom_colors) +
+  theme_void() +
+  theme(
+    plot.title = element_text(color = "black", face = "bold", size = 18, hjust = 0.5),
+    legend.title = element_text(color = "black", size = 14),
+    legend.text = element_text(color = "black", size = 12),
+    panel.background = element_rect(fill = "grey95", color = NA),
+    plot.background = element_rect(fill = "grey95", color = NA),
+    legend.position = "right"
+  )
 ```
 
 ```{r}
-# Merge the datasets by city and date parameters 
-merged_data <- left_join(peds_visits, ice_raids, by = c("city", "date"))
+ggplot() +
+  # First layer: ER Visits
+  geom_line(data = merged_data, 
+            aes(x = date, y = er_visits, color = "ER Visits"), 
+            stat = "summary", fun = sum, size = 1) +
+  # Second layer: ICE Arrests (note: using arrests_made)
+  geom_line(data = merged_data, 
+            aes(x = date, y = arrests_made, color = "ICE Arrests"), 
+            stat = "summary", fun = sum, size = 1) +
+  labs(title = "ER Visits & ICE Arrests",
+       x = "Date", 
+       y = "Count",
+       color = "Metric") +
+  scale_color_manual(values = c("ER Visits" = "#0072B2", "ICE Arrests" = "#D55E00")) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+        axis.title = element_text(face = "bold", size = 12),
+        axis.text = element_text(size = 10),
+        legend.title = element_text(face = "bold", size = 12),
+        legend.text = element_text(size = 10))
 
-# Simple exploratory Data Analysis
-ggplot(df, aes(x = date, y = er_visits, color = treated)) +
-  geom_line(stat = "summary", fun = mean) +
-  labs(title = "Pediatric ER Visits Before & After ICE Raids",
-       x = "Date", y = "Average ER Visits",
-       color = "ICE Raid Occurred") +
-  theme_minimal()
 ```
+
 ```{r}
+#partioning the data into a training and testing sets 
 set.seed(42)
 n <- nrow(merged_data)
-train_indices <- sample(1:n, size = 0.8 * n, replace = FALSE)
+train_indices <-sample(1:n, size = 0.8 * n, replace = FALSE)
 train_data <- merged_data[train_indices, ]
 test_data <- merged_data[-train_indices, ]
 ```
 
 
-
 ```{r}
 # fitting a linear regression model
-model <- lm(er_visits ~ num_raids + arrests_made+respiratory_cases + mental_health_cases+ uninsured_patients, data = merged_data)
+model <- lm(er_visits ~ num_raids + arrests_made+respiratory_cases + mental_health_cases+ uninsured_patients, data=merged_data)
 summary(model)
 ```
 ```{r}
-# model selection using AIC/BIC
-stepwise_model <-stepAIC(model,direction = "both")
+formula <- er_visits ~ num_raids + arrests_made + uninsured_patients + respiratory_cases + mental_health_cases
 ```
+
 ```{r}
-#Ridge regression
-x <- model.matrix(er_visits ~ num_raids + arrests_made + respiratory_cases + mental_health_cases + uninsured_patients, merged_data)[, -1]
+X <- model.matrix(formula, merged_data)[,-1]
 y <- merged_data$er_visits
-ridge_model <- cv.glmnet(x, y, alpha = 0)
-plot(ridge_model)
+```
+
+
+LASSO Regression
+```{r}
+lasso_model <- cv.glmnet(X, y, alpha=1)
+lasso_coefs <- coef(lasso_model, s = "lambda.min")
+lasso_coefs
+
+```
+
+Ridge Regression
+```{r}
+ridge_model <- cv.glmnet(X, y, alpha=0)
+ridge_coefs <- coef(ridge_model, s = "lambda.min")
+print(ridge_coefs)
+```
+
+
+```{r}
+residuals <- resid(model)
+fitted <- fitted(model)
+
+#residuals vs fitted plot
+plot(fitted,residuals, main="Residuals vs Fitted", xlab="Fitted Values", ylab="Residuals")
+abline(h=0,col="maroon",lty=2)
 ```
 
 ```{r}
-# diagnostics
-par(mfrow = c(2, 2))
-plot(model)
+# Q-Q Plot for Residuals
+qqnorm(residuals(model), main = "Normal Q-Q Plot for Model Residuals")
+qqline(residuals(model), col = "maroon", lwd = 2)
 
-dwtest(model)  # Checking for auto-correlation
-vif(model)  # Check if there is multi-collinearity
 ```
+```{r}
+# Cook's Distance Plot to identify influential observations
+cooksd <- cooks.distance(model)
+plot(cooksd, type = "h", main = "Cook's Distance", ylab = "Cook's Distance", col = "maroon")
+abline(h = 4/(nrow(merged_data)-length(model$coefficients)-2), col = "red", lty = 2)
+text(x = 1:length(cooksd), y = cooksd, labels = ifelse(cooksd > 4/(nrow(merged_data)-length(model$coefficients)-2), names(cooksd), ""), pos = 4, col = "red", cex = 0.7)
+
+```
+
 
 ```{r}
-pcr_model <- pcr(er_visits ~ ., data = merged_data, scale = TRUE, validation = "CV")
-summary(pcr_model)
+set.seed(123)
+model <- lm(er_visits ~ num_raids + arrests_made + respiratory_cases + mental_health_cases + uninsured_patients, data = merged_data)
+
+predictions <- predict(model, newdata = test_data)
+rmse <- sqrt(mean((test_data$er_visits - predictions)^2))
+print(paste("Test RMSE:", round(rmse, 2)))
 
 ```
+The average prediction error was approximately 2.78.
+
 
 ```{r}
-model_interaction <- lm(er_visits ~ num_raids * mental_health_cases + arrests_made, data = merged_data)
-summary(model_interaction)
+# Fit the full model
+full_model <- lm(er_visits ~ num_raids + arrests_made + respiratory_cases + mental_health_cases + uninsured_patients, data = merged_data)
+
+# Perform stepwise selection
+step_model <- stepAIC(full_model, direction = "both", trace = FALSE)
+summary(step_model)
 
 ```
+```{r}
+# Simulate random assignment of a treatment indicator (0 = No, 1 = Yes)
+set.seed(42)
+merged_data <- merged_data %>%
+  mutate(random_treatment = sample(c(0, 1), n(), replace = TRUE))
+
+# Check the distribution of the randomized treatment
+table(merged_data$random_treatment)
+```
+```{r}
+# Fit a linear model with the randomized treatment variable
+random_model <- lm(er_visits ~ random_treatment + num_raids + arrests_made + respiratory_cases + mental_health_cases + uninsured_patients, data = merged_data)
+summary(random_model)
+
+```
+Although our data is observational, we simulate a randomized treatment assignment to demonstrate how one might analyze experimental data or adjust for something like selection bias.
 
 
 
