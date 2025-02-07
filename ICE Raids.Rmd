@@ -1,0 +1,88 @@
+---
+title: "Code Sample ICE Raids"
+output:
+  pdf_document: default
+  html_document: default
+author: Cesar Gutierrez
+date: "2025-02-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(lmtest)
+library(car)
+library(MASS)
+library(glmnet)
+
+ice_raids <- read_excel("ice_raids.xlsx")
+peds_visits <- read_excel("pediatric_visits.xlsx")
+```
+
+```{r}
+# Merge the datasets by city and date parameters 
+merged_data <- left_join(peds_visits, ice_raids, by = c("city", "date"))
+
+# Simple exploratory Data Analysis
+ggplot(df, aes(x = date, y = er_visits, color = treated)) +
+  geom_line(stat = "summary", fun = mean) +
+  labs(title = "Pediatric ER Visits Before & After ICE Raids",
+       x = "Date", y = "Average ER Visits",
+       color = "ICE Raid Occurred") +
+  theme_minimal()
+```
+```{r}
+set.seed(42)
+n <- nrow(merged_data)
+train_indices <- sample(1:n, size = 0.8 * n, replace = FALSE)
+train_data <- merged_data[train_indices, ]
+test_data <- merged_data[-train_indices, ]
+```
+
+
+
+```{r}
+# fitting a linear regression model
+model <- lm(er_visits ~ num_raids + arrests_made+respiratory_cases + mental_health_cases+ uninsured_patients, data = merged_data)
+summary(model)
+```
+```{r}
+# model selection using AIC/BIC
+stepwise_model <-stepAIC(model,direction = "both")
+```
+```{r}
+#Ridge regression
+x <- model.matrix(er_visits ~ num_raids + arrests_made + respiratory_cases + mental_health_cases + uninsured_patients, merged_data)[, -1]
+y <- merged_data$er_visits
+ridge_model <- cv.glmnet(x, y, alpha = 0)
+plot(ridge_model)
+```
+
+```{r}
+# diagnostics
+par(mfrow = c(2, 2))
+plot(model)
+
+dwtest(model)  # Checking for auto-correlation
+vif(model)  # Check if there is multi-collinearity
+```
+
+```{r}
+pcr_model <- pcr(er_visits ~ ., data = merged_data, scale = TRUE, validation = "CV")
+summary(pcr_model)
+
+```
+
+```{r}
+model_interaction <- lm(er_visits ~ num_raids * mental_health_cases + arrests_made, data = merged_data)
+summary(model_interaction)
+
+```
+
+
+
